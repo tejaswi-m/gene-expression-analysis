@@ -94,7 +94,11 @@ def choose_gene_identifier_column(df: pd.DataFrame) -> str:
     )
 
 
-def find_sample_columns(columns: pd.Index, control_prefix: str, case_prefix: str) -> tuple[list[str], list[str]]:
+def find_sample_columns(
+    columns: pd.Index,
+    control_prefix: str | tuple[str, ...],
+    case_prefix: str | tuple[str, ...],
+) -> tuple[list[str], list[str]]:
     control_cols = [col for col in columns if str(col).startswith(control_prefix)]
     case_cols = [col for col in columns if str(col).startswith(case_prefix)]
     if not control_cols or not case_cols:
@@ -103,58 +107,58 @@ def find_sample_columns(columns: pd.Index, control_prefix: str, case_prefix: str
         )
     return control_cols, case_cols
 
-# backup to extract from metadat. This is not used as the prefix is passed to the function above.
-# def find_sample_columns_from_metadata(
-#     columns: pd.Index,
-#     metadata: pd.DataFrame,
-#     sample_column: str,
-#     phenotype_column: str | None,
-#     control_keywords: list[str],
-#     case_keywords: list[str],
-# ) -> tuple[list[str], list[str]]:
-#     if sample_column not in metadata.columns:
-#         raise ValueError(f"Metadata sample column not found: {sample_column}")
+# backup to extract from metadata. If we are unable to determine the difference based on prefixes.
+def find_sample_columns_from_metadata(
+    columns: pd.Index,
+    metadata: pd.DataFrame,
+    sample_column: str,
+    phenotype_column: str | None,
+    control_keywords: list[str],
+    case_keywords: list[str],
+) -> tuple[list[str], list[str]]:
+    if sample_column not in metadata.columns:
+        raise ValueError(f"Metadata sample column not found: {sample_column}")
 
-#     column_set = {str(col) for col in columns}
-#     aligned = metadata[metadata[sample_column].astype(str).isin(column_set)].copy()
-#     if aligned.empty:
-#         raise ValueError("No metadata samples match expression column names")
+    column_set = {str(col) for col in columns}
+    aligned = metadata[metadata[sample_column].astype(str).isin(column_set)].copy()
+    if aligned.empty:
+        raise ValueError("No metadata samples match expression column names")
 
-#     aligned["_sample_name"] = aligned[sample_column].astype(str).str.lower()
-#     if phenotype_column and phenotype_column in aligned.columns:
-#         aligned["_phenotype"] = aligned[phenotype_column].fillna("").astype(str).str.lower()
-#     else:
-#         aligned["_phenotype"] = ""
+    aligned["_sample_name"] = aligned[sample_column].astype(str).str.lower()
+    if phenotype_column and phenotype_column in aligned.columns:
+        aligned["_phenotype"] = aligned[phenotype_column].fillna("").astype(str).str.lower()
+    else:
+        aligned["_phenotype"] = ""
 
-#     control_mask = np.zeros(len(aligned), dtype=bool)
-#     case_mask = np.zeros(len(aligned), dtype=bool)
-#     for key in control_keywords:
-#         control_mask |= aligned["_phenotype"].str.contains(re.escape(key), na=False)
-#         control_mask |= aligned["_sample_name"].str.contains(re.escape(key), na=False)
-#     for key in case_keywords:
-#         case_mask |= aligned["_phenotype"].str.contains(re.escape(key), na=False)
-#         case_mask |= aligned["_sample_name"].str.contains(re.escape(key), na=False)
+    control_mask = np.zeros(len(aligned), dtype=bool)
+    case_mask = np.zeros(len(aligned), dtype=bool)
+    for key in control_keywords:
+        control_mask |= aligned["_phenotype"].str.contains(re.escape(key), na=False)
+        control_mask |= aligned["_sample_name"].str.contains(re.escape(key), na=False)
+    for key in case_keywords:
+        case_mask |= aligned["_phenotype"].str.contains(re.escape(key), na=False)
+        case_mask |= aligned["_sample_name"].str.contains(re.escape(key), na=False)
 
-#     control_cols = aligned.loc[control_mask, sample_column].astype(str).tolist()
-#     case_cols = aligned.loc[case_mask, sample_column].astype(str).tolist()
+    control_cols = aligned.loc[control_mask, sample_column].astype(str).tolist()
+    case_cols = aligned.loc[case_mask, sample_column].astype(str).tolist()
 
-#     if not control_cols or not case_cols:
-#         if phenotype_column and phenotype_column in aligned.columns:
-#             values = aligned[phenotype_column].fillna("").astype(str).str.strip()
-#             unique_values = [value for value in sorted(values.unique()) if value]
-#             if len(unique_values) == 2:
-#                 control_cols = aligned.loc[
-#                     values == unique_values[0], sample_column
-#                 ].astype(str).tolist()
-#                 case_cols = aligned.loc[
-#                     values == unique_values[1], sample_column
-#                 ].astype(str).tolist()
+    if not control_cols or not case_cols:
+        if phenotype_column and phenotype_column in aligned.columns:
+            values = aligned[phenotype_column].fillna("").astype(str).str.strip()
+            unique_values = [value for value in sorted(values.unique()) if value]
+            if len(unique_values) == 2:
+                control_cols = aligned.loc[
+                    values == unique_values[0], sample_column
+                ].astype(str).tolist()
+                case_cols = aligned.loc[
+                    values == unique_values[1], sample_column
+                ].astype(str).tolist()
 
-#     if not control_cols or not case_cols:
-#         raise ValueError(
-#             "Could not infer both control and case groups from metadata and sample names"
-#         )
-#     return control_cols, case_cols
+    if not control_cols or not case_cols:
+        raise ValueError(
+            "Could not infer both control and case groups from metadata and sample names"
+        )
+    return control_cols, case_cols
 
 
 def choose_gene_symbol_column(columns: pd.Index) -> str:
@@ -856,8 +860,8 @@ def run_expression_analysis(
     output_dir: str | Path | None = None,
     top_genes: int = 25,
     metadata_file: str | Path | None = None,
-    control_prefix: str | None = None,
-    case_prefix: str | None = None,
+    control_prefix: str | tuple[str, ...] | None = None,
+    case_prefix: str | tuple[str, ...] | None = None,
     metadata_sample_column: str | None = None,
     metadata_phenotype_column: str | None = None,
     control_label_keywords: str | None = None,
@@ -901,14 +905,14 @@ def run_expression_analysis(
             raise ValueError(
                 "metadata_sample_column is required when metadata-based grouping is used"
             )
-        # control_cols, case_cols = find_sample_columns_from_metadata(
-        #     df.columns,
-        #     metadata,
-        #     sample_column=metadata_sample_column,
-        #     phenotype_column=metadata_phenotype_column,
-        #     control_keywords=_maybe_split_keywords(control_label_keywords),
-        #     case_keywords=_maybe_split_keywords(case_label_keywords),
-        # )
+        control_cols, case_cols = find_sample_columns_from_metadata(
+            df.columns,
+            metadata,
+            sample_column=metadata_sample_column,
+            phenotype_column=metadata_phenotype_column,
+            control_keywords=_maybe_split_keywords(control_label_keywords),
+            case_keywords=_maybe_split_keywords(case_label_keywords),
+        )
 
     if "Gene Symbol" not in df.columns and gene_col in df.columns:
         df = df.copy()
