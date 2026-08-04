@@ -233,7 +233,7 @@ corrected_df <- data.frame(ROW_ID__ = rownames(corrected),
                             row.names = NULL, check.names = FALSE)
 
 result_df <- merge(expression_df[, other_cols, drop = FALSE], corrected_df,
-                    by = "ROW_ID__", all.x = TRUE)
+                    by = "ROW_ID__", all.x = FALSE)
 result_df$ROW_ID__ <- NULL
 
 

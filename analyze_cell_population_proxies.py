@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Estimate blood cell-population proxy scores from GEO-style expression datasets.
 
 This script is designed to be reusable across different GEO datasets by:
@@ -10,6 +9,7 @@ This script is designed to be reusable across different GEO datasets by:
 from __future__ import annotations
 
 import argparse
+import math
 import re
 from pathlib import Path
 
@@ -122,57 +122,57 @@ def find_sample_columns_by_prefix(
     return control_cols, case_cols
 
 
-def find_sample_columns_from_metadata(
-    columns: pd.Index,
-    metadata: pd.DataFrame,
-    sample_column: str,
-    phenotype_column: str | None,
-    control_keywords: list[str],
-    case_keywords: list[str],
-) -> tuple[list[str], list[str]]:
-    if sample_column not in metadata.columns:
-        raise ValueError(f"Metadata sample column not found: {sample_column}")
+# def find_sample_columns_from_metadata(
+#     columns: pd.Index,
+#     metadata: pd.DataFrame,
+#     sample_column: str,
+#     phenotype_column: str | None,
+#     control_keywords: list[str],
+#     case_keywords: list[str],
+# ) -> tuple[list[str], list[str]]:
+#     if sample_column not in metadata.columns:
+#         raise ValueError(f"Metadata sample column not found: {sample_column}")
 
-    column_set = {str(col) for col in columns}
-    aligned = metadata[metadata[sample_column].astype(str).isin(column_set)].copy()
-    if aligned.empty:
-        raise ValueError("No metadata samples match expression column names")
+#     column_set = {str(col) for col in columns}
+#     aligned = metadata[metadata[sample_column].astype(str).isin(column_set)].copy()
+#     if aligned.empty:
+#         raise ValueError("No metadata samples match expression column names")
 
-    aligned["_sample_name"] = aligned[sample_column].astype(str).str.lower()
-    if phenotype_column and phenotype_column in aligned.columns:
-        aligned["_phenotype"] = aligned[phenotype_column].fillna("").astype(str).str.lower()
-    else:
-        aligned["_phenotype"] = ""
+#     aligned["_sample_name"] = aligned[sample_column].astype(str).str.lower()
+#     if phenotype_column and phenotype_column in aligned.columns:
+#         aligned["_phenotype"] = aligned[phenotype_column].fillna("").astype(str).str.lower()
+#     else:
+#         aligned["_phenotype"] = ""
 
-    control_mask = np.zeros(len(aligned), dtype=bool)
-    case_mask = np.zeros(len(aligned), dtype=bool)
-    for key in control_keywords:
-        control_mask |= aligned["_phenotype"].str.contains(key, na=False)
-        control_mask |= aligned["_sample_name"].str.contains(key, na=False)
-    for key in case_keywords:
-        case_mask |= aligned["_phenotype"].str.contains(key, na=False)
-        case_mask |= aligned["_sample_name"].str.contains(key, na=False)
+#     control_mask = np.zeros(len(aligned), dtype=bool)
+#     case_mask = np.zeros(len(aligned), dtype=bool)
+#     for key in control_keywords:
+#         control_mask |= aligned["_phenotype"].str.contains(key, na=False)
+#         control_mask |= aligned["_sample_name"].str.contains(key, na=False)
+#     for key in case_keywords:
+#         case_mask |= aligned["_phenotype"].str.contains(key, na=False)
+#         case_mask |= aligned["_sample_name"].str.contains(key, na=False)
 
-    control_cols = aligned.loc[control_mask, sample_column].astype(str).tolist()
-    case_cols = aligned.loc[case_mask, sample_column].astype(str).tolist()
+#     control_cols = aligned.loc[control_mask, sample_column].astype(str).tolist()
+#     case_cols = aligned.loc[case_mask, sample_column].astype(str).tolist()
 
-    if not control_cols or not case_cols:
-        if phenotype_column and phenotype_column in aligned.columns:
-            values = aligned[phenotype_column].fillna("").astype(str).str.strip()
-            unique_values = [value for value in sorted(values.unique()) if value]
-            if len(unique_values) == 2:
-                control_cols = aligned.loc[
-                    values == unique_values[0], sample_column
-                ].astype(str).tolist()
-                case_cols = aligned.loc[
-                    values == unique_values[1], sample_column
-                ].astype(str).tolist()
+#     if not control_cols or not case_cols:
+#         if phenotype_column and phenotype_column in aligned.columns:
+#             values = aligned[phenotype_column].fillna("").astype(str).str.strip()
+#             unique_values = [value for value in sorted(values.unique()) if value]
+#             if len(unique_values) == 2:
+#                 control_cols = aligned.loc[
+#                     values == unique_values[0], sample_column
+#                 ].astype(str).tolist()
+#                 case_cols = aligned.loc[
+#                     values == unique_values[1], sample_column
+#                 ].astype(str).tolist()
 
-    if not control_cols or not case_cols:
-        raise ValueError(
-            "Could not infer both control and case groups from metadata and sample names"
-        )
-    return control_cols, case_cols
+#     if not control_cols or not case_cols:
+#         raise ValueError(
+#             "Could not infer both control and case groups from metadata and sample names"
+#         )
+#     return control_cols, case_cols
 
 
 def infer_metadata_sample_column(
@@ -307,17 +307,19 @@ def build_expression_matrices(
     gene_col: str,
     control_cols: list[str],
     case_cols: list[str],
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> pd.DataFrame:
     sample_cols = control_cols + case_cols
     matrix = df[[gene_col] + sample_cols].copy()
     matrix = matrix.set_index(gene_col)
     matrix = matrix.apply(pd.to_numeric, errors="coerce")
     matrix = matrix.loc[~matrix.index.duplicated(keep="first")]
+    return matrix
 
-    z_matrix = matrix.sub(matrix.mean(axis=1), axis=0)
-    z_matrix = z_matrix.div(matrix.std(axis=1).replace(0, np.nan), axis=0)
-    z_matrix = z_matrix.fillna(0.0)
-    return matrix, z_matrix
+
+def zscore_rows(matrix: pd.DataFrame) -> pd.DataFrame:
+    z = matrix.sub(matrix.mean(axis=1), axis=0)
+    z = z.div(matrix.std(axis=1).replace(0, np.nan), axis=0)
+    return z.fillna(0.0)
 
 
 def compute_pca(
@@ -357,7 +359,7 @@ def compute_pca(
 
 
 def compute_cell_population_scores(
-    z_matrix: pd.DataFrame,
+    matrix: pd.DataFrame,
     blood_cell_markers: dict[str, list[str]],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     score_records = []
@@ -365,7 +367,7 @@ def compute_cell_population_scores(
 
     # Case-insensitive matching to support mixed gene-symbol casing.
     upper_to_gene: dict[str, str] = {}
-    for gene in z_matrix.index.astype(str):
+    for gene in matrix.index.astype(str):
         upper_to_gene.setdefault(gene.upper(), gene)
         for token in _tokenize_gene_identifier(gene):
             upper_to_gene.setdefault(token.upper(), gene)
@@ -381,7 +383,8 @@ def compute_cell_population_scores(
         if not used_markers:
             continue
 
-        cell_scores = z_matrix.loc[used_markers].mean(axis=0)
+        z_markers = zscore_rows(matrix.loc[used_markers])
+        cell_scores = z_markers.mean(axis=0)
         for sample, score in cell_scores.items():
             score_records.append(
                 {
@@ -400,6 +403,7 @@ def compute_cell_population_scores(
                 "marker_genes_used": "; ".join(used_markers),
             }
         )
+        
 
     return pd.DataFrame(score_records), pd.DataFrame(marker_records)
 
@@ -496,15 +500,61 @@ def save_proxy_boxplot(score_df: pd.DataFrame, pca_df: pd.DataFrame, output_dir:
     plt.close()
 
 
-def save_proxy_heatmap(score_df: pd.DataFrame, pca_df: pd.DataFrame, output_dir: Path) -> None:
+def select_top_cell_types(
+    associations: pd.DataFrame,
+    top_n: int,
+) -> tuple[list[str], list[str]]:
+    """Rank cell types by case-vs-control mean_difference in proxy score and
+    split into the top_n most increased ("up") and top_n most decreased
+    ("down") in cases, mirroring the up/down gene selection used for the
+    differential-expression heatmap."""
+    if associations.empty:
+        return [], []
+
+    ranked = associations.copy()
+    ranked["abs_mean_difference"] = ranked["mean_difference"].abs()
+
+    up_cell_types = (
+        ranked[ranked["mean_difference"] > 0]
+        .sort_values("abs_mean_difference", ascending=False)
+        .head(top_n)["cell_type"]
+        .tolist()
+    )
+    down_cell_types = (
+        ranked[ranked["mean_difference"] < 0]
+        .sort_values("abs_mean_difference", ascending=False)
+        .head(top_n)["cell_type"]
+        .tolist()
+    )
+    return up_cell_types, down_cell_types
+
+
+def save_proxy_heatmap(
+    score_df: pd.DataFrame,
+    pca_df: pd.DataFrame,
+    associations: pd.DataFrame,
+    output_dir: Path,
+    top_n: int = 10,
+) -> tuple[list[str], list[str]]:
     if score_df.empty:
-        return
+        return [], []
+
+    up_cell_types, down_cell_types = select_top_cell_types(associations, top_n)
+    selected_cell_types = [
+        cell_type
+        for cell_type in dict.fromkeys(up_cell_types + down_cell_types)
+        if cell_type in score_df["cell_type"].unique()
+    ]
+    if not selected_cell_types:
+        selected_cell_types = score_df["cell_type"].unique().tolist()
 
     merge_cols = ["sample", "phenotype"]
     if "gender" in pca_df.columns:
         merge_cols.append("gender")
 
-    plot_df = score_df.merge(pca_df[merge_cols], how="left", on="sample")
+    plot_df = score_df[score_df["cell_type"].isin(selected_cell_types)].merge(
+        pca_df[merge_cols], how="left", on="sample"
+    )
 
     order_cols = ["phenotype", "sample"]
     if "gender" in plot_df.columns:
@@ -513,26 +563,28 @@ def save_proxy_heatmap(score_df: pd.DataFrame, pca_df: pd.DataFrame, output_dir:
     order_df = plot_df[["sample"] + [col for col in order_cols if col != "sample"]].drop_duplicates()
     order_df = order_df.sort_values(order_cols)
 
-    heatmap_df = (
-        plot_df.pivot(index="cell_type", columns="sample", values="proxy_score")
-        .reindex(columns=order_df["sample"])
+    wide_proxy_scores = plot_df.pivot(index="cell_type", columns="sample", values="proxy_score")
+    heatmap_df = zscore_rows(wide_proxy_scores).reindex(
+        index=selected_cell_types, columns=order_df["sample"]
     )
 
-    plt.figure(figsize=(14, 6))
+    plt.figure(figsize=(14, max(6, math.ceil(len(selected_cell_types) * 0.4))))
     sns.heatmap(
         heatmap_df,
         cmap="vlag",
         center=0,
         xticklabels=False,
         yticklabels=True,
-        cbar_kws={"label": "Proxy score"},
+        cbar_kws={"label": "Cell-type-wise z-score of proxy score"},
     )
-    plt.title("Blood Cell-Population Proxy Scores Across Samples")
+    plt.title("Top Up and Down Blood Cell-Population Proxy Scores Across Samples")
     plt.xlabel("Samples ordered by group, optional sex, and sample name")
     plt.ylabel("Cell population")
     plt.tight_layout()
     plt.savefig(output_dir / "cell_population_proxy_heatmap.png", dpi=220)
     plt.close()
+
+    return up_cell_types, down_cell_types
 
 
 def save_pca_colored_by_top_proxies(
@@ -580,12 +632,26 @@ def save_pca_colored_by_top_proxies(
     plt.close(grid.figure)
 
 
+def report_pc1_correlation_by_cell_type(associations: pd.DataFrame) -> pd.DataFrame:
+    """Return PC1 vs. proxy-score Spearman correlations, one row per cell type,
+    ranked by correlation strength (strongest association first)."""
+    if associations.empty:
+        return pd.DataFrame(columns=["cell_type", "pc1_spearman_rho", "pc1_p_value"])
+
+    return (
+        associations[["cell_type", "pc1_spearman_rho", "pc1_p_value"]]
+        .sort_values("pc1_spearman_rho", key=lambda col: col.abs(), ascending=False)
+        .reset_index(drop=True)
+    )
+
+
 def write_report(
     marker_df: pd.DataFrame,
     associations: pd.DataFrame,
     output_dir: Path,
     marker_source: str,
 ) -> None:
+    pc1_correlations = report_pc1_correlation_by_cell_type(associations)
     lines = [
         "Cell-population proxy analysis",
         "",
@@ -597,6 +663,9 @@ def write_report(
         "",
         "Marker coverage:",
         marker_df.to_string(index=False) if not marker_df.empty else "No markers matched.",
+        "",
+        "PC1 correlation by cell type (Spearman, ranked by |rho|):",
+        pc1_correlations.to_string(index=False) if not pc1_correlations.empty else "No associations available.",
         "",
         "Top PCA associations:",
         associations.head(8).to_string(index=False) if not associations.empty else "No associations available.",
@@ -676,16 +745,16 @@ def run_cell_proxy_analysis(
             raise ValueError(
                 "metadata_sample_column is required when metadata-based grouping is used"
             )
-        control_cols, case_cols = find_sample_columns_from_metadata(
-            df.columns,
-            metadata,
-            sample_column=metadata_sample_column,
-            phenotype_column=metadata_phenotype_column,
-            control_keywords=control_keywords,
-            case_keywords=case_keywords,
-        )
+        # control_cols, case_cols = find_sample_columns_from_metadata(
+        #     df.columns,
+        #     metadata,
+        #     sample_column=metadata_sample_column,
+        #     phenotype_column=metadata_phenotype_column,
+        #     control_keywords=control_keywords,
+        #     case_keywords=case_keywords,
+        # )
 
-    matrix, z_matrix = build_expression_matrices(df, gene_col, control_cols, case_cols)
+    matrix = build_expression_matrices(df, gene_col, control_cols, case_cols)
     pca_df, explained = compute_pca(
         matrix,
         control_cols,
@@ -695,7 +764,7 @@ def run_cell_proxy_analysis(
         case_label=case_label,
     )
 
-    score_df, marker_df = compute_cell_population_scores(z_matrix, blood_cell_markers)
+    score_df, marker_df = compute_cell_population_scores(matrix, blood_cell_markers)
     total_markers_used = int(marker_df["markers_used"].sum()) if not marker_df.empty else 0
     if total_markers_used == 0:
         preview = (
@@ -739,9 +808,20 @@ def run_cell_proxy_analysis(
     marker_df.to_csv(output_dir / "cell_population_marker_coverage.csv", index=False)
     associations.to_csv(output_dir / "cell_population_pca_associations.csv", index=False)
 
+    pc1_correlations = report_pc1_correlation_by_cell_type(associations)
+    pc1_correlations.to_csv(output_dir / "pc1_correlation_by_cell_type.csv", index=False)
+
     save_proxy_boxplot(score_df, pca_df, output_dir)
-    save_proxy_heatmap(score_df, pca_df, output_dir)
+    up_cell_types, down_cell_types = save_proxy_heatmap(score_df, pca_df, associations, output_dir)
+    pd.DataFrame({"top_up_cell_types": up_cell_types}).to_csv(
+        output_dir / "top_up_cell_types.csv", index=False
+    )
+    pd.DataFrame({"top_down_cell_types": down_cell_types}).to_csv(
+        output_dir / "top_down_cell_types.csv", index=False
+    )
     save_pca_colored_by_top_proxies(score_df, pca_df, explained, associations, output_dir)
     write_report(marker_df, associations, output_dir, marker_source=marker_source)
 
     print(f"Saved cell-population proxy outputs to {output_dir}")
+    print("PC1 correlation by cell type (Spearman, ranked by |rho|):")
+    print(pc1_correlations.to_string(index=False) if not pc1_correlations.empty else "No associations available.")

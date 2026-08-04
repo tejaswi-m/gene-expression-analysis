@@ -20,12 +20,14 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 import seaborn as sns
 from scipy import stats
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+import statsmodels.formula.api as smf
 from statsmodels.stats.multitest import multipletests
 
 
@@ -38,7 +40,7 @@ def _maybe_split_keywords(text: str | None) -> list[str]:
         return []
     return _split_keywords(text)
 
-
+# this function will help to figure out which column means what. It is done instead of hard coding the columns
 def infer_metadata_sample_column(
     metadata: pd.DataFrame,
     expression_columns: pd.Index,
@@ -101,58 +103,58 @@ def find_sample_columns(columns: pd.Index, control_prefix: str, case_prefix: str
         )
     return control_cols, case_cols
 
+# backup to extract from metadat. This is not used as the prefix is passed to the function above.
+# def find_sample_columns_from_metadata(
+#     columns: pd.Index,
+#     metadata: pd.DataFrame,
+#     sample_column: str,
+#     phenotype_column: str | None,
+#     control_keywords: list[str],
+#     case_keywords: list[str],
+# ) -> tuple[list[str], list[str]]:
+#     if sample_column not in metadata.columns:
+#         raise ValueError(f"Metadata sample column not found: {sample_column}")
 
-def find_sample_columns_from_metadata(
-    columns: pd.Index,
-    metadata: pd.DataFrame,
-    sample_column: str,
-    phenotype_column: str | None,
-    control_keywords: list[str],
-    case_keywords: list[str],
-) -> tuple[list[str], list[str]]:
-    if sample_column not in metadata.columns:
-        raise ValueError(f"Metadata sample column not found: {sample_column}")
+#     column_set = {str(col) for col in columns}
+#     aligned = metadata[metadata[sample_column].astype(str).isin(column_set)].copy()
+#     if aligned.empty:
+#         raise ValueError("No metadata samples match expression column names")
 
-    column_set = {str(col) for col in columns}
-    aligned = metadata[metadata[sample_column].astype(str).isin(column_set)].copy()
-    if aligned.empty:
-        raise ValueError("No metadata samples match expression column names")
+#     aligned["_sample_name"] = aligned[sample_column].astype(str).str.lower()
+#     if phenotype_column and phenotype_column in aligned.columns:
+#         aligned["_phenotype"] = aligned[phenotype_column].fillna("").astype(str).str.lower()
+#     else:
+#         aligned["_phenotype"] = ""
 
-    aligned["_sample_name"] = aligned[sample_column].astype(str).str.lower()
-    if phenotype_column and phenotype_column in aligned.columns:
-        aligned["_phenotype"] = aligned[phenotype_column].fillna("").astype(str).str.lower()
-    else:
-        aligned["_phenotype"] = ""
+#     control_mask = np.zeros(len(aligned), dtype=bool)
+#     case_mask = np.zeros(len(aligned), dtype=bool)
+#     for key in control_keywords:
+#         control_mask |= aligned["_phenotype"].str.contains(re.escape(key), na=False)
+#         control_mask |= aligned["_sample_name"].str.contains(re.escape(key), na=False)
+#     for key in case_keywords:
+#         case_mask |= aligned["_phenotype"].str.contains(re.escape(key), na=False)
+#         case_mask |= aligned["_sample_name"].str.contains(re.escape(key), na=False)
 
-    control_mask = np.zeros(len(aligned), dtype=bool)
-    case_mask = np.zeros(len(aligned), dtype=bool)
-    for key in control_keywords:
-        control_mask |= aligned["_phenotype"].str.contains(re.escape(key), na=False)
-        control_mask |= aligned["_sample_name"].str.contains(re.escape(key), na=False)
-    for key in case_keywords:
-        case_mask |= aligned["_phenotype"].str.contains(re.escape(key), na=False)
-        case_mask |= aligned["_sample_name"].str.contains(re.escape(key), na=False)
+#     control_cols = aligned.loc[control_mask, sample_column].astype(str).tolist()
+#     case_cols = aligned.loc[case_mask, sample_column].astype(str).tolist()
 
-    control_cols = aligned.loc[control_mask, sample_column].astype(str).tolist()
-    case_cols = aligned.loc[case_mask, sample_column].astype(str).tolist()
+#     if not control_cols or not case_cols:
+#         if phenotype_column and phenotype_column in aligned.columns:
+#             values = aligned[phenotype_column].fillna("").astype(str).str.strip()
+#             unique_values = [value for value in sorted(values.unique()) if value]
+#             if len(unique_values) == 2:
+#                 control_cols = aligned.loc[
+#                     values == unique_values[0], sample_column
+#                 ].astype(str).tolist()
+#                 case_cols = aligned.loc[
+#                     values == unique_values[1], sample_column
+#                 ].astype(str).tolist()
 
-    if not control_cols or not case_cols:
-        if phenotype_column and phenotype_column in aligned.columns:
-            values = aligned[phenotype_column].fillna("").astype(str).str.strip()
-            unique_values = [value for value in sorted(values.unique()) if value]
-            if len(unique_values) == 2:
-                control_cols = aligned.loc[
-                    values == unique_values[0], sample_column
-                ].astype(str).tolist()
-                case_cols = aligned.loc[
-                    values == unique_values[1], sample_column
-                ].astype(str).tolist()
-
-    if not control_cols or not case_cols:
-        raise ValueError(
-            "Could not infer both control and case groups from metadata and sample names"
-        )
-    return control_cols, case_cols
+#     if not control_cols or not case_cols:
+#         raise ValueError(
+#             "Could not infer both control and case groups from metadata and sample names"
+#         )
+#     return control_cols, case_cols
 
 
 def choose_gene_symbol_column(columns: pd.Index) -> str:
@@ -203,15 +205,18 @@ def deduplicate_probes(
 
 def build_expression_matrices(
     df: pd.DataFrame, gene_col: str, control_cols: list[str], case_cols: list[str]
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> pd.DataFrame:
     matrix = df[[gene_col] + control_cols + case_cols].copy()
     matrix = matrix.set_index(gene_col)
     matrix = matrix.apply(pd.to_numeric, errors="coerce")
     matrix = matrix.loc[~matrix.index.duplicated(keep="first")]
-    z_matrix = matrix.sub(matrix.mean(axis=1), axis=0)
-    z_matrix = z_matrix.div(matrix.std(axis=1).replace(0, np.nan), axis=0)
-    z_matrix = z_matrix.fillna(0.0)
-    return matrix, z_matrix
+    return matrix
+
+
+def zscore_rows(matrix: pd.DataFrame) -> pd.DataFrame:
+    z = matrix.sub(matrix.mean(axis=1), axis=0)
+    z = z.div(matrix.std(axis=1).replace(0, np.nan), axis=0)
+    return z.fillna(0.0)
 
 
 def compute_differential_expression(
@@ -256,32 +261,133 @@ def compute_differential_expression(
 
 
 def compute_group_scores(
-    z_matrix: pd.DataFrame,
+    matrix: pd.DataFrame,
     up_genes: list[str],
     down_genes: list[str],
     control_cols: list[str],
     case_label: str,
     control_label: str,
 ) -> pd.DataFrame:
+    selected_genes = [
+        gene for gene in dict.fromkeys(up_genes + down_genes) if gene in matrix.index
+    ]
+    z_selected = zscore_rows(matrix.loc[selected_genes]) if selected_genes else matrix.loc[[]]
+    up_index = z_selected.index.intersection(up_genes)
+    down_index = z_selected.index.intersection(down_genes)
+
     sample_groups = []
     control_set = set(control_cols)
-    for sample in z_matrix.columns:
+    for sample in matrix.columns:
         sample_groups.append(
             {
                 "sample": sample,
                 "phenotype": control_label if sample in control_set else case_label,
-                "up_group_score": z_matrix.loc[
-                    z_matrix.index.intersection(up_genes), sample
-                ].mean(),
-                "down_group_score": z_matrix.loc[
-                    z_matrix.index.intersection(down_genes), sample
-                ].mean(),
+                "up_group_score": z_selected.loc[up_index, sample].mean(),
+                "down_group_score": z_selected.loc[down_index, sample].mean(),
             }
         )
 
     scores = pd.DataFrame(sample_groups)
     scores["contrast_score"] = scores["up_group_score"] - scores["down_group_score"]
     return scores
+
+
+def _describe_regression_term(
+    term: str,
+    control_label: str,
+    case_label: str,
+    covariate_map: dict[str, str],
+) -> str:
+    if term == "Intercept":
+        return f"Intercept ({control_label} baseline)"
+    if term.startswith("C(group"):
+        return f"{case_label} vs {control_label} (group)"
+    for safe_name, original_name in covariate_map.items():
+        if term == safe_name:
+            return original_name
+        if term.startswith(f"C({safe_name})"):
+            level = term.split("[T.")[1].rstrip("]") if "[T." in term else ""
+            return f"{original_name}: {level}" if level else original_name
+    return term
+
+
+def compute_regression_contrast_score(
+    scores: pd.DataFrame,
+    metadata: pd.DataFrame | None,
+    metadata_sample_column: str | None,
+    control_label: str,
+    case_label: str,
+    covariate_columns: list[str] | None = None,
+) -> pd.DataFrame:
+    """Fit contrast_score ~ group (+ covariates) via OLS and report the
+    case-vs-control regression coefficient adjusted for available covariates
+    (e.g. age, gender), alongside the covariate effects themselves."""
+    regression_df = scores[["sample", "phenotype", "contrast_score"]].copy()
+    covariate_map: dict[str, str] = {}
+
+    if metadata is not None and metadata_sample_column and metadata_sample_column in metadata.columns:
+        candidate_covariates = covariate_columns or ["age", "gender"]
+        available_covariates = [col for col in candidate_covariates if col in metadata.columns]
+        if available_covariates:
+            covariate_slice = metadata[[metadata_sample_column] + available_covariates].copy()
+            regression_df = regression_df.merge(
+                covariate_slice,
+                how="left",
+                left_on="sample",
+                right_on=metadata_sample_column,
+            )
+            for index, column in enumerate(available_covariates):
+                safe_name = f"covariate_{index}"
+                regression_df = regression_df.rename(columns={column: safe_name})
+                covariate_map[safe_name] = column
+
+    regression_df = regression_df.dropna(
+        subset=["contrast_score", "phenotype", *covariate_map.keys()]
+    )
+    empty_result = pd.DataFrame(
+        columns=[
+            "term", "coefficient", "std_error", "t_value", "p_value",
+            "conf_int_low", "conf_int_high", "n_samples", "r_squared",
+            "covariates_included",
+        ]
+    )
+    if {control_label, case_label} - set(regression_df["phenotype"].unique()):
+        return empty_result
+
+    regression_df["group"] = pd.Categorical(
+        regression_df["phenotype"], categories=[control_label, case_label]
+    )
+
+    formula_terms = [f"C(group, Treatment(reference='{control_label}'))"]
+    for safe_name in covariate_map:
+        if pd.api.types.is_numeric_dtype(regression_df[safe_name]):
+            formula_terms.append(safe_name)
+        else:
+            formula_terms.append(f"C({safe_name})")
+    formula = "contrast_score ~ " + " + ".join(formula_terms)
+
+    model = smf.ols(formula, data=regression_df).fit()
+    conf_int = model.conf_int()
+
+    rows = []
+    for term in model.params.index:
+        rows.append(
+            {
+                "term": _describe_regression_term(term, control_label, case_label, covariate_map),
+                "coefficient": model.params[term],
+                "std_error": model.bse[term],
+                "t_value": model.tvalues[term],
+                "p_value": model.pvalues[term],
+                "conf_int_low": conf_int.loc[term, 0],
+                "conf_int_high": conf_int.loc[term, 1],
+            }
+        )
+
+    result = pd.DataFrame(rows)
+    result["n_samples"] = len(regression_df)
+    result["r_squared"] = model.rsquared
+    result["covariates_included"] = ", ".join(covariate_map.values()) if covariate_map else "none"
+    return result
 
 
 def save_distribution_plot(
@@ -446,7 +552,7 @@ def save_volcano_plot(diff: pd.DataFrame, output_dir: Path, top_n: int) -> None:
 
 
 def save_heatmap(
-    z_matrix: pd.DataFrame,
+    matrix: pd.DataFrame,
     diff: pd.DataFrame,
     control_cols: list[str],
     case_cols: list[str],
@@ -456,7 +562,7 @@ def save_heatmap(
 ) -> tuple[list[str], list[str]]:
     significant = diff[diff["fdr"] < fdr_threshold].copy()
     significant["abs_log2_fold_change"] = significant["log2_fold_change"].abs()
- 
+
     up_genes = (
         significant[significant["log2_fold_change"] > 0]
         .sort_values("abs_log2_fold_change", ascending=False)
@@ -470,7 +576,7 @@ def save_heatmap(
         .tolist()
     )
 
-    selected_genes = [gene for gene in up_genes + down_genes if gene in z_matrix.index]
+    selected_genes = [gene for gene in up_genes + down_genes if gene in matrix.index]
 
     if not selected_genes:
         plt.figure(figsize=(10, 4))
@@ -485,7 +591,7 @@ def save_heatmap(
         return up_genes, down_genes
 
     ordered_cols = control_cols + case_cols
-    heatmap_df = z_matrix.loc[selected_genes, ordered_cols]
+    heatmap_df = zscore_rows(matrix.loc[selected_genes, ordered_cols])
 
     plt.figure(figsize=(12, max(8, math.ceil(len(selected_genes) * 0.18))))
     sns.heatmap(
@@ -541,6 +647,65 @@ def save_gene_group_plot(scores: pd.DataFrame, output_dir: Path) -> None:
     plt.ylabel("Average gene-wise z-score")
     plt.tight_layout()
     plt.savefig(output_dir / "gene_group_scores.png", dpi=220)
+    plt.close()
+
+
+def save_regression_contrast_plot(
+    regression_contrast: pd.DataFrame, output_dir: Path
+) -> None:
+    if regression_contrast.empty:
+        plt.figure(figsize=(10, 4))
+        plt.axis("off")
+        plt.text(
+            0.5, 0.5,
+            "Regression could not be fit.",
+            ha="center", va="center", fontsize=12,
+        )
+        plt.savefig(output_dir / "regression_contrast_score.png", dpi=220)
+        plt.close()
+        return
+
+    plot_df = regression_contrast.iloc[::-1].reset_index(drop=True)
+    significant = plot_df["p_value"] < 0.05
+    sig_color, nonsig_color = "#3B6FA0", "#9CA3AF"
+
+    fig, ax = plt.subplots(figsize=(10, max(4, 0.6 * len(plot_df) + 2)))
+    for i, (_, row) in enumerate(plot_df.iterrows()):
+        color = sig_color if significant.iloc[i] else nonsig_color
+        ax.errorbar(
+            row["coefficient"], i,
+            xerr=[[row["coefficient"] - row["conf_int_low"]],
+                  [row["conf_int_high"] - row["coefficient"]]],
+            fmt="o", color=color, ecolor=color, elinewidth=1.5, capsize=4,
+            markersize=8, markeredgecolor="white", markeredgewidth=0.8, zorder=3,
+        )
+
+    ax.axvline(0, color="#444444", linestyle="--", linewidth=1)
+    ax.set_yticks(range(len(plot_df)))
+    ax.set_yticklabels(plot_df["term"])
+    ax.set_ylim(-0.5, len(plot_df) - 0.5)
+
+    covariates_note = (
+        plot_df["covariates_included"].iloc[0]
+        if "covariates_included" in plot_df.columns
+        else "none"
+    )
+    xlabel = "Coefficient (95% CI)"
+    if covariates_note and covariates_note != "none":
+        xlabel += f" — model adjusted for {covariates_note}"
+    ax.set_xlabel(xlabel)
+    ax.set_title("Regression Contrast Score Coefficients")
+
+    legend_elements = [
+        Line2D([0], [0], marker="o", color="w", markerfacecolor=sig_color,
+               markersize=9, label="p < 0.05"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor=nonsig_color,
+               markersize=9, label="p ≥ 0.05"),
+    ]
+    ax.legend(handles=legend_elements, loc="best", frameon=True)
+
+    plt.tight_layout()
+    plt.savefig(output_dir / "regression_contrast_score.png", dpi=220)
     plt.close()
 
 
@@ -611,6 +776,7 @@ def save_summary_tables(
     scores: pd.DataFrame,
     up_genes: list[str],
     down_genes: list[str],
+    regression_contrast: pd.DataFrame,
     output_dir: Path,
 ) -> None:
     deduplicated.to_csv(output_dir / "deduplicated_expression_dataset.csv", index=False)
@@ -623,12 +789,14 @@ def save_summary_tables(
     pd.DataFrame({"top_down_genes": down_genes}).to_csv(
         output_dir / "top_down_genes.csv", index=False
     )
+    regression_contrast.to_csv(output_dir / "regression_contrast_score.csv", index=False)
 
 
 def write_report(
     deduplicated: pd.DataFrame,
     duplicates: pd.DataFrame,
     diff: pd.DataFrame,
+    regression_contrast: pd.DataFrame,
     control_cols: list[str],
     case_cols: list[str],
     output_dir: Path,
@@ -658,6 +826,18 @@ def write_report(
         f"Top {top_n} genes ranked by Welch t-test p-value:",
         top_table.to_string(index=False),
         "",
+        f"Regression contrast score (contrast_score ~ group"
+        + (
+            f" + {regression_contrast['covariates_included'].iloc[0]}"
+            if not regression_contrast.empty
+            and regression_contrast["covariates_included"].iloc[0] != "none"
+            else ""
+        )
+        + "):",
+        regression_contrast.drop(columns=["covariates_included"]).to_string(index=False)
+        if not regression_contrast.empty
+        else "Regression could not be fit.",
+        "",
         "Generated figures:",
         "- sample_median_expression.png",
         "- pca_samples.png",
@@ -666,6 +846,7 @@ def write_report(
         "- heatmap_top_differential_genes.png",
         "- gene_group_scores.png",
         "- individual_gene_panels.png",
+        "- regression_contrast_score.png",
     ]
     (output_dir / "analysis_report.txt").write_text("\n".join(lines))
 
@@ -683,6 +864,7 @@ def run_expression_analysis(
     case_label_keywords: str | None = None,
     control_label: str = "Group_A",
     case_label: str = "Group_B",
+    covariate_columns: list[str] | None = None,
 ) -> None:
     input_path = Path(input_file)
     output_dir = Path(output_dir) if output_dir else input_path.parent / "expression_analysis_results"
@@ -719,14 +901,14 @@ def run_expression_analysis(
             raise ValueError(
                 "metadata_sample_column is required when metadata-based grouping is used"
             )
-        control_cols, case_cols = find_sample_columns_from_metadata(
-            df.columns,
-            metadata,
-            sample_column=metadata_sample_column,
-            phenotype_column=metadata_phenotype_column,
-            control_keywords=_maybe_split_keywords(control_label_keywords),
-            case_keywords=_maybe_split_keywords(case_label_keywords),
-        )
+        # control_cols, case_cols = find_sample_columns_from_metadata(
+        #     df.columns,
+        #     metadata,
+        #     sample_column=metadata_sample_column,
+        #     phenotype_column=metadata_phenotype_column,
+        #     control_keywords=_maybe_split_keywords(control_label_keywords),
+        #     case_keywords=_maybe_split_keywords(case_label_keywords),
+        # )
 
     if "Gene Symbol" not in df.columns and gene_col in df.columns:
         df = df.copy()
@@ -736,20 +918,34 @@ def run_expression_analysis(
     sample_cols = control_cols + case_cols
 
     deduplicated, duplicates = deduplicate_probes(df, gene_col, sample_cols)
-    matrix, z_matrix = build_expression_matrices(
+    matrix = build_expression_matrices(
         deduplicated, gene_col, control_cols, case_cols
     )
     diff = compute_differential_expression(matrix, control_cols, case_cols)
     up_genes, down_genes = save_heatmap(
-        z_matrix, diff, control_cols, case_cols, output_dir, top_genes
+        matrix, diff, control_cols, case_cols, output_dir, top_genes
     )
     scores = compute_group_scores(
-        z_matrix,
+        matrix,
         up_genes,
         down_genes,
         control_cols,
         case_label,
         control_label,
+    )
+    regression_contrast = compute_regression_contrast_score(
+        scores,
+        metadata,
+        metadata_sample_column,
+        control_label,
+        case_label,
+        covariate_columns,
+    )
+    print("Regression contrast score (contrast_score ~ group + covariates):")
+    print(
+        regression_contrast.drop(columns=["covariates_included"]).to_string(index=False)
+        if not regression_contrast.empty
+        else "Regression could not be fit."
     )
 
     save_distribution_plot(
@@ -772,6 +968,7 @@ def run_expression_analysis(
     )
     save_volcano_plot(diff, output_dir, min(15, top_genes))
     save_gene_group_plot(scores, output_dir)
+    save_regression_contrast_plot(regression_contrast, output_dir)
     save_individual_gene_panels(
         matrix,
         diff,
@@ -781,12 +978,20 @@ def run_expression_analysis(
         case_label=case_label,
     )
     save_summary_tables(
-        deduplicated, duplicates, diff, scores, up_genes, down_genes, output_dir
+        deduplicated,
+        duplicates,
+        diff,
+        scores,
+        up_genes,
+        down_genes,
+        regression_contrast,
+        output_dir,
     )
     write_report(
         deduplicated,
         duplicates,
         diff,
+        regression_contrast,
         control_cols,
         case_cols,
         output_dir,

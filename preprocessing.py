@@ -15,202 +15,15 @@ from __future__ import annotations
 import argparse
 import csv
 import gzip
-import re
-import ssl
-import subprocess
 import tarfile
 import textwrap
-from io import StringIO
 from pathlib import Path
 from typing import Callable
-from urllib.error import URLError
-from urllib.request import urlopen
 
 import numpy as np
 import pandas as pd
 
-PROJECT_ROOT = Path(__file__).resolve().parent
 MAPPING_TEXT = ""
-
-
-def parse_series_platform_id(series_matrix_path: Path) -> str | None:
-    with series_matrix_path.open("r", encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            if line.startswith("!Series_platform_id"):
-                parts = line.rstrip("\n").split("\t")
-                if len(parts) < 2:
-                    return None
-                value = parts[1].strip().strip('"')
-                return value or None
-            if line.startswith("!series_matrix_table_begin"):
-                break
-    return None
-
-
-def resolve_annotation_path(
-    series_matrix_path: Path,
-    explicit_annotation_path: str | Path | None,
-) -> Path | None:
-    if explicit_annotation_path:
-        candidate = Path(explicit_annotation_path)
-        return candidate if candidate.exists() else None
-
-    platform_id = parse_series_platform_id(series_matrix_path)
-    search_roots = [PROJECT_ROOT]
-
-    if platform_id:
-        platform_key = platform_id.lower().replace("-", "")
-        direct_candidates = [
-            PROJECT_ROOT / platform_id / f"{platform_id}_annotation.csv",
-            PROJECT_ROOT / platform_id / "annotation.csv",
-            PROJECT_ROOT / platform_id / "platform_annotation.csv",
-            PROJECT_ROOT / f"{platform_id}_annotation.csv",
-            PROJECT_ROOT / f"{platform_id}.csv",
-        ]
-        for candidate in direct_candidates:
-            if candidate.exists():
-                return candidate
-
-        for root in search_roots:
-            for file_path in root.rglob("*.csv"):
-                path_lower = str(file_path).lower()
-                name_lower = file_path.name.lower()
-                if platform_key not in path_lower:
-                    continue
-                if "annotation" in name_lower:
-                    return file_path
-
-        return None
-    return None
-
-
-def _choose_column(columns: list[str], candidates: list[str]) -> str | None:
-    lower_map = {col.lower().strip(): col for col in columns}
-    for candidate in candidates:
-        if candidate.lower() in lower_map:
-            return lower_map[candidate.lower()]
-    return None
-
-
-def _fetch_text_from_url(url: str, timeout: int = 90) -> str | None:
-    try:
-        with urlopen(url, timeout=timeout) as response:
-            return response.read().decode("utf-8", errors="replace")
-    except Exception:
-        pass
-
-    # Some local Python SSL setups fail validation for NCBI endpoints.
-    try:
-        insecure_ctx = ssl._create_unverified_context()
-        with urlopen(url, timeout=timeout, context=insecure_ctx) as response:
-            return response.read().decode("utf-8", errors="replace")
-    except Exception:
-        pass
-
-    # Final fallback that works in environments where urllib TLS fails but curl succeeds.
-    try:
-        result = subprocess.run(
-            ["curl", "-L", "--max-time", str(timeout), url],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode == 0 and result.stdout:
-            return result.stdout
-    except Exception:
-        pass
-
-    return None
-
-
-def download_platform_annotation_from_geo(platform_id: str, output_path: Path) -> Path | None:
-    # GEO text view contains a platform table between !platform_table_begin/end.
-    url = (
-        "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi"
-        f"?acc={platform_id}&targ=self&form=text&view=full"
-    )
-    text = _fetch_text_from_url(url, timeout=90)
-    if not text:
-        return None
-
-    begin_token = "!platform_table_begin"
-    end_token = "!platform_table_end"
-    begin = text.find(begin_token)
-    end = text.find(end_token)
-    if begin == -1 or end == -1 or end <= begin:
-        return None
-
-    table_text = text[begin + len(begin_token):end].strip()
-    if not table_text:
-        return None
-
-    platform_df = pd.read_csv(
-        StringIO(table_text),
-        sep="\t",
-        dtype=str,
-        engine="python",
-    )
-    if platform_df.empty:
-        return None
-
-    cols = list(platform_df.columns)
-    id_col = _choose_column(cols, ["ID", "ID_REF", "PROBEID", "Probe ID"])
-    symbol_col = _choose_column(
-        cols,
-        [
-            "Gene Symbol",
-            "GENE_SYMBOL",
-            "GENE SYMBOL",
-            "Symbol",
-            "Gene symbol",
-            "Gene",
-            "GENE",
-            "GENE NAME",
-        ],
-    )
-    title_col = _choose_column(
-        cols,
-        [
-            "Gene Title",
-            "GENE_TITLE",
-            "GENE TITLE",
-            "Gene title",
-            "Description",
-            "DESCRIPTION",
-            "Gene Description",
-            "Title",
-            "GENE_NAME",
-        ],
-    )
-    if id_col is None:
-        return None
-
-    out_df = pd.DataFrame({
-        "ID": platform_df[id_col].astype(str),
-        "Gene Symbol": platform_df[symbol_col].astype(str) if symbol_col else "",
-        "Gene Title": platform_df[title_col].astype(str) if title_col else "",
-    })
-    out_df["ID"] = out_df["ID"].str.strip()
-    out_df["Gene Symbol"] = out_df["Gene Symbol"].str.strip()
-    out_df["Gene Title"] = out_df["Gene Title"].str.strip()
-    out_df = out_df[out_df["ID"] != ""]
-    out_df = out_df.drop_duplicates(subset=["ID"], keep="first")
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    out_df.to_csv(output_path, index=False)
-    return output_path
-
-def resolve_mapping_text(args: argparse.Namespace) -> str:
-    if args.mapping_text and args.mapping_file:
-        raise ValueError("Use only one of --mapping-text or --mapping-file")
-    if args.mapping_text:
-        return textwrap.dedent(args.mapping_text).strip()
-    if args.mapping_file:
-        mapping_path = Path(args.mapping_file)
-        ensure_exists(mapping_path, "Mapping file")
-        return mapping_path.read_text(encoding="utf-8").strip()
-    return MAPPING_TEXT.strip()
-
 
 def find_table_bounds(file_path: Path) -> tuple[int, int]:
     begin_line = None
@@ -525,47 +338,6 @@ def ensure_exists(path: Path, description: str) -> None:
         raise FileNotFoundError(f"{description} not found: {path}")
 
 
-def generate_fallback_annotation(
-    series_matrix_path: Path,
-    output_path: Path,
-    expression_id_column: str = "ID_REF",
-    annotation_id_column: str = "ID",
-    annotation_symbol_column: str = "Gene Symbol",
-    annotation_title_column: str = "Gene Title",
-) -> Path:
-    """Create a minimal probe annotation table from expression IDs.
-
-    This allows pipelines to run when platform annotation files are unavailable.
-    Gene symbol defaults to the probe ID and title is left blank.
-    """
-
-    expression_df = load_series_matrix_as_dataframe(series_matrix_path)
-    if expression_id_column not in expression_df.columns:
-        raise ValueError(
-            f"Cannot generate fallback annotation: missing {expression_id_column} column"
-        )
-
-    probe_ids = (
-        expression_df[expression_id_column]
-        .dropna()
-        .astype(str)
-        .str.strip()
-    )
-    probe_ids = probe_ids[probe_ids != ""]
-    probe_ids = probe_ids.drop_duplicates().reset_index(drop=True)
-
-    fallback_annotation = pd.DataFrame(
-        {
-            annotation_id_column: probe_ids,
-            annotation_symbol_column: probe_ids,
-            annotation_title_column: "",
-        }
-    )
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fallback_annotation.to_csv(output_path, index=False)
-    return output_path
-
-
 def parse_supplementary_file_map(series_matrix_path: Path) -> dict[str, str]:
     """Map each GSM accession to the basename of its per-sample supplementary file.
 
@@ -759,36 +531,10 @@ def run_preprocessor(
         annotated_df.to_csv(original_output_path, index=False)
         annotated_df.to_csv(annotated_output_path, index=False)
     else:
-        resolved_annotation_path = resolve_annotation_path(series_matrix_path, annotation_path)
-        if resolved_annotation_path is None:
-            platform_id = parse_series_platform_id(series_matrix_path)
-            if platform_id:
-                auto_annotation_path = (
-                    output_directory_path / f"{platform_id}_annotation_auto.csv"
-                )
-                downloaded = download_platform_annotation_from_geo(
-                    platform_id,
-                    auto_annotation_path,
-                )
-                if downloaded is not None:
-                    print(f"Downloaded platform annotation from GEO: {downloaded}")
-                    resolved_annotation_path = downloaded
-
-        if resolved_annotation_path is None:
-            platform_id = parse_series_platform_id(series_matrix_path)
-            print(
-                "WARNING: no matching annotation file was found"
-                + (f" for platform {platform_id}" if platform_id else "")
-                + "; "
-                "falling back to probe-ID-as-symbol annotation. Cell-type marker "
-                "matching and gene-level interpretation will not work correctly."
-            )
-            resolved_annotation_path = generate_fallback_annotation(
-                series_matrix_path,
-                output_directory_path / "generated_annotation.csv",
-            )
-        else:
-            print(f"Using annotation file: {resolved_annotation_path}")
+        if not annotation_path:
+            raise ValueError("annotation_path is required")
+        resolved_annotation_path = Path(annotation_path)
+        ensure_exists(resolved_annotation_path, "Annotation file")
 
         expression_df = load_series_matrix_as_dataframe(series_matrix_path)
         expression_df = drop_rows_with_only_reference(expression_df, reference_column="ID_REF")
@@ -843,64 +589,3 @@ def run_preprocessor(
     metadata_df.to_csv(metadata_output_path, index=False)
 
     return expression_output_path, metadata_output_path
-
-
-# def main() -> None:
-#     args = parse_args()
-#     series_matrix_path = Path(args.series_matrix)
-#     annotation_path = Path(args.annotation)
-#     expression_output_path = Path(args.expression_output)
-#     metadata_output_path = Path(args.metadata_output)
-#     mapping = build_column_mapping(
-#         resolve_mapping_text(args),
-#         args.mapping_strip_prefix,
-#     )
-
-#     ensure_exists(series_matrix_path, "Series matrix file")
-#     ensure_exists(annotation_path, "Annotation file")
-
-#     expression_df = load_series_matrix_as_dataframe(series_matrix_path)
-#     annotation_df = load_annotation(
-#         annotation_path,
-#         args.annotation_id_column,
-#         args.annotation_symbol_column,
-#         args.annotation_title_column,
-#     )
-#     processed_expression_df, mapped_columns = rename_and_unlog(
-#         merge_annotation(
-#             expression_df,
-#             annotation_df,
-#             args.expression_id_column,
-#             args.annotation_id_column,
-#             args.annotation_symbol_column,
-#             args.annotation_title_column,
-#         ),
-#         mapping,
-#     )
-
-#     sample_rows = read_sample_header_rows(series_matrix_path)
-#     metadata_df = build_metadata_frame(
-#         sample_rows,
-#         mapping,
-#         args.sample_title_prefix,
-#         args.control_prefix,
-#         args.case_prefix,
-#         args.control_label,
-#         args.case_label,
-#     )
-#     validate_sample_alignment(metadata_df, processed_expression_df, mapped_columns)
-
-#     expression_output_path.parent.mkdir(parents=True, exist_ok=True)
-#     metadata_output_path.parent.mkdir(parents=True, exist_ok=True)
-#     processed_expression_df.to_csv(expression_output_path, index=False)
-#     metadata_df.to_csv(metadata_output_path, index=False)
-
-#     print(f"Expression rows:      {len(processed_expression_df)}")
-#     print(f"Mapped sample columns:{len(mapped_columns):>9}")
-#     print(f"Expression output:    {expression_output_path}")
-#     print(f"Metadata rows:        {len(metadata_df)}")
-#     print(f"Metadata output:      {metadata_output_path}")
-
-
-# if __name__ == "__main__":
-#     main()
