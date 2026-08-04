@@ -25,59 +25,59 @@ from run_qc_normalize_r import run_qc_normalization
 # so they are excluded from the two-group differential-expression/cell-proxy
 # steps rather than being folded into either group.
 mapping_text = """
-GSM973762	S_MDD-376
-GSM973763	S_HC-104
-GSM973764	S_HC-261
-GSM973765	S_MDD-465
-GSM973766	S_HC-513
-GSM973767	S_BD2-231
-GSM973768	S_HC-365
-GSM973769	S_HC-3
-GSM973770	S_MDD-456
-GSM973771	S_HC-284
-GSM973772	S_BD2-282
-GSM973773	S_MDD-425
-GSM973774	S_MDD-397
-GSM973775	S_BD1-351
-GSM973776	S_MDD-329
-GSM973777	S_MDD-395
-GSM973778	S_MDD-305
-GSM973779	S_HC-45
-GSM973780	S_HC-209
-GSM973781	S_HC-592
-GSM973782	S_BD1-588
-GSM973783	S_HC-418
-GSM973784	S_MDD-341
-GSM973785	S_HC-84
-GSM973786	S_HC-296
-GSM973787	S_MDD-328
-GSM973788	S_HC-172
-GSM973789	S_HC-216
-GSM973790	S_BD1-362
-GSM973791	S_MDD-347
-GSM973792	S_HC-321
-GSM973793	S_HC-285
-GSM973794	S_MDD-343
-GSM973795	S_MDD-369
-GSM973796	S_MDD-286
-GSM973797	S_HC-350
-GSM973798	S_MDD-398
-GSM973799	S_HC-253
-GSM973800	S_BD2-244
-GSM973801	S_HC-262
-GSM973802	S_MDD-580
-GSM973803	S_MDD-407
-GSM973804	S_MDD-573
-GSM973805	S_MDD-402
-GSM973806	S_BD2-338
-GSM973807	S_HC-115
-GSM973808	S_HC-204
-GSM973809	S_BD1-568
-GSM973810	S_HC-569
-GSM973811	S_HC-279
-GSM973812	S_MDD-566
-GSM973813	S_HC-88
-GSM973814	S_MDD-433
+GSM973762	MDD-376
+GSM973763	HC-104
+GSM973764	HC-261
+GSM973765	MDD-465
+GSM973766	HC-513
+GSM973767	BD2-231
+GSM973768	HC-365
+GSM973769	HC-3
+GSM973770	MDD-456
+GSM973771	HC-284
+GSM973772	BD2-282
+GSM973773	MDD-425
+GSM973774	MDD-397
+GSM973775	BD1-351
+GSM973776	MDD-329
+GSM973777	MDD-395
+GSM973778	MDD-305
+GSM973779	HC-45
+GSM973780	HC-209
+GSM973781	HC-592
+GSM973782	BD1-588
+GSM973783	HC-418
+GSM973784	MDD-341
+GSM973785	HC-84
+GSM973786	HC-296
+GSM973787	MDD-328
+GSM973788	HC-172
+GSM973789	HC-216
+GSM973790	BD1-362
+GSM973791	MDD-347
+GSM973792	HC-321
+GSM973793	HC-285
+GSM973794	MDD-343
+GSM973795	MDD-369
+GSM973796	MDD-286
+GSM973797	HC-350
+GSM973798	MDD-398
+GSM973799	HC-253
+GSM973800	BD2-244
+GSM973801	HC-262
+GSM973802	MDD-580
+GSM973803	MDD-407
+GSM973804	MDD-573
+GSM973805	MDD-402
+GSM973806	BD2-338
+GSM973807	HC-115
+GSM973808	HC-204
+GSM973809	BD1-568
+GSM973810	HC-569
+GSM973811	HC-279
+GSM973812	MDD-566
+GSM973813	HC-88
+GSM973814	MDD-433
 """
 
 
@@ -92,7 +92,7 @@ expression_csv, metadata_csv = run_preprocessor(
     phenotype_characteristic_name="disease",
     phenotype_value_map={
         "healthy control": "Control",
-        "major depressive disorder": "Case",
+        "major depressive disorder/ bipolar disorder": "Case",
     },
 )
 
@@ -117,6 +117,8 @@ run_expression_analysis(
     case_label_keywords="case",
     control_label="Control",
     case_label="Case",
+    control_prefix="HC",
+    case_prefix=("MDD", "BD"),
 )
 
 run_cell_proxy_analysis(
@@ -130,6 +132,23 @@ run_cell_proxy_analysis(
     case_label_keywords="case",
     control_label="Control",
     case_label="Case",
+    control_prefix="HC",
+    case_prefix=("MDD", "BD"),
+)
+
+run_cell_proxy_analysis(
+    input_file=results_dir / "deduplicated_expression_dataset.csv",
+    metadata_file=TEST_DIR / "processed_data" / "sample_metadata.csv",
+    output_dir=TEST_DIR / "cell_population_proxies_neutrophil",
+    markers_csv=PROJECT_ROOT / "markers" / "blood_cell_markers.csv",
+    metadata_sample_column="analysis_sample",
+    metadata_phenotype_column="depression_status",
+    control_label_keywords="control",
+    case_label_keywords="case",
+    control_label="Control",
+    case_label="Case",
+    control_prefix="HC",
+    case_prefix=("MDD", "BD"),
 )
 
 print(f"Expression output: {expression_csv}")
