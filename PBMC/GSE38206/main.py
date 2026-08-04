@@ -20,42 +20,42 @@ from analyze_cell_population_proxies import run_cell_proxy_analysis
 from run_qc_normalize_r import run_qc_normalization
 
 mapping_text = """
-GSM936718	S_PBMC_P1-0w_rep1
-GSM936719	S_PBMC_P1-8w_rep1
-GSM936720	S_PBMC_P2-0w_rep1
-GSM936721	S_PBMC_P2-8w_rep1
-GSM936722	S_PBMC_P3-0w_rep1
-GSM936723	S_PBMC_P3-8w_rep1
-GSM936724	S_PBMC_P4-0w_rep1
-GSM936725	S_PBMC_P4-8w_rep1
-GSM936726	S_PBMC_P5-0w_rep1
-GSM936727	S_PBMC_P5-8w_rep1
-GSM936728	S_PBMC_P6-0w_rep1
-GSM936729	S_PBMC_P6-8w_rep1
-GSM936730	S_PBMC_P7-0w_rep1
-GSM936731	S_PBMC_P7-8w_rep1
-GSM936732	S_PBMC_P8-0w_rep1
-GSM936733	S_PBMC_P8-8w_rep1
-GSM936734	S_PBMC_P9-0w_rep1
-GSM936735	S_PBMC_P9-8w_rep1
-GSM936736	S_PBMC_C1-0w_rep1
-GSM936737	S_PBMC_C1-8w_rep1
-GSM936738	S_PBMC_C2-0w_rep1
-GSM936739	S_PBMC_C2-8w_rep1
-GSM936740	S_PBMC_C3-0w_rep1
-GSM936741	S_PBMC_C3-8w_rep1
-GSM936742	S_PBMC_C4-0w_rep1
-GSM936743	S_PBMC_C4-8w_rep1
-GSM936744	S_PBMC_C5-0w_rep1
-GSM936745	S_PBMC_C5-8w_rep1
-GSM936746	S_PBMC_C6-0w_rep1
-GSM936747	S_PBMC_C6-8w_rep1
-GSM936748	S_PBMC_C7-0w_rep1
-GSM936749	S_PBMC_C7-8w_rep1
-GSM936750	S_PBMC_C8-0w_rep1
-GSM936751	S_PBMC_C8-8w_rep1
-GSM936752	S_PBMC_C9-0w_rep1
-GSM936753	S_PBMC_C9-8w_rep1
+GSM936718	PBMC_P1-0w_rep1
+GSM936719	PBMC_P1-8w_rep1
+GSM936720	PBMC_P2-0w_rep1
+GSM936721	PBMC_P2-8w_rep1
+GSM936722	PBMC_P3-0w_rep1
+GSM936723	PBMC_P3-8w_rep1
+GSM936724	PBMC_P4-0w_rep1
+GSM936725	PBMC_P4-8w_rep1
+GSM936726	PBMC_P5-0w_rep1
+GSM936727	PBMC_P5-8w_rep1
+GSM936728	PBMC_P6-0w_rep1
+GSM936729	PBMC_P6-8w_rep1
+GSM936730	PBMC_P7-0w_rep1
+GSM936731	PBMC_P7-8w_rep1
+GSM936732	PBMC_P8-0w_rep1
+GSM936733	PBMC_P8-8w_rep1
+GSM936734	PBMC_P9-0w_rep1
+GSM936735	PBMC_P9-8w_rep1
+GSM936736	PBMC_C1-0w_rep1
+GSM936737	PBMC_C1-8w_rep1
+GSM936738	PBMC_C2-0w_rep1
+GSM936739	PBMC_C2-8w_rep1
+GSM936740	PBMC_C3-0w_rep1
+GSM936741	PBMC_C3-8w_rep1
+GSM936742	PBMC_C4-0w_rep1
+GSM936743	PBMC_C4-8w_rep1
+GSM936744	PBMC_C5-0w_rep1
+GSM936745	PBMC_C5-8w_rep1
+GSM936746	PBMC_C6-0w_rep1
+GSM936747	PBMC_C6-8w_rep1
+GSM936748	PBMC_C7-0w_rep1
+GSM936749	PBMC_C7-8w_rep1
+GSM936750	PBMC_C8-0w_rep1
+GSM936751	PBMC_C8-8w_rep1
+GSM936752	PBMC_C9-0w_rep1
+GSM936753	PBMC_C9-8w_rep1
 """
 
 
@@ -95,6 +95,8 @@ run_expression_analysis(
     case_label_keywords="case",
     control_label="Control",
     case_label="Case",
+    control_prefix="PBMC_C",
+    case_prefix="PBMC_P",
 )
 
 run_cell_proxy_analysis(
@@ -108,6 +110,24 @@ run_cell_proxy_analysis(
     case_label_keywords="case",
     control_label="Control",
     case_label="Case",
+    control_prefix="PBMC_C",
+    case_prefix="PBMC_P",
+)
+
+# to see with neutrophil in PBMC
+run_cell_proxy_analysis(
+    input_file=results_dir / "deduplicated_expression_dataset.csv",
+    metadata_file=TEST_DIR / "processed_data" / "sample_metadata.csv",
+    output_dir=TEST_DIR / "cell_population_proxies_neutrophil",
+    markers_csv=PROJECT_ROOT / "markers" / "blood_cell_markers.csv",
+    metadata_sample_column="analysis_sample",
+    metadata_phenotype_column="depression_status",
+    control_label_keywords="control",
+    case_label_keywords="case",
+    control_label="Control",
+    case_label="Case",
+    control_prefix="PBMC_C",
+    case_prefix="PBMC_P",
 )
 
 print(f"Expression output: {expression_csv}")
