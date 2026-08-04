@@ -95,6 +95,17 @@ run_cell_proxy_analysis(
     case_label="Case",
 )
 
+run_cell_proxy_analysis(
+    input_file=results_dir / "deduplicated_expression_dataset.csv",
+    metadata_file=TEST_DIR / "processed_data" / "sample_metadata.csv",
+    output_dir=TEST_DIR / "cell_population_proxies_neutrophil",
+    markers_csv=PROJECT_ROOT / "markers" / "blood_cell_markers.csv",
+    control_prefix="NC",
+    case_prefix="ND",
+    control_label="Control",
+    case_label="Case",
+)
+
 print(f"Expression output: {expression_csv}")
 print(f"Metadata output:   {metadata_csv}")
 print(f"Analysis outputs:  {TEST_DIR / 'cell_population_proxies'}")
